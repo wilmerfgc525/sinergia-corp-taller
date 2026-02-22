@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, TrendingUp, Wallet, AlertCircle, ChevronRight, Trophy, RotateCcw, CheckCircle2, Clock, Smartphone, Plus } from 'lucide-react';
+import { Users, TrendingUp, Wallet, AlertCircle, ChevronRight, Trophy, RotateCcw, CheckCircle2, Clock, Smartphone, Plus, Eye } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
@@ -8,6 +8,10 @@ import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from 'firebase/fires
 
 const TOTAL_ROUNDS = 5;
 const INITIAL_TOKENS = 10;
+
+// Utilidades seguras para prevenir colapsos de pantalla en React por desincronización
+const safeNum = (num) => Number(num) || 0;
+const safeScore = (score) => safeNum(score).toFixed(1);
 
 // Paleta de colores para asignar automáticamente a los equipos que se unan
 const TEAM_COLORS = [
@@ -56,7 +60,7 @@ export default function App() {
   const [playerInput, setPlayerInput] = useState(0);
   const [joinName, setJoinName] = useState('');
 
-  // 1. Auth Init: Login anónimo directo para despliegues externos
+  // 1. Auth Init: Login anónimo directo
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -64,7 +68,7 @@ export default function App() {
         await signInAnonymously(auth); 
       } catch (err) {
         console.error("Auth error:", err);
-        setAuthError("Error de autenticación. Verifica que el 'Inicio de sesión anónimo' esté habilitado en Firebase Authentication.");
+        setAuthError("No pudimos conectarte a la sala. Verifica la configuración de Firebase.");
       }
     };
     initAuth();
@@ -72,7 +76,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Data Sync Blindado (Eliminamos dependencia del rol para que nunca se desconecte)
+  // 2. Data Sync Blindado
   useEffect(() => {
     if (!user || !db) return;
 
@@ -83,7 +87,6 @@ export default function App() {
         if (docSnap.exists()) {
           setGameData(docSnap.data());
         } else {
-          // Si el documento NO existe, ponemos a todos en espera
           setGameData({ status: 'waiting_host', teams: [] });
         }
       },
@@ -146,7 +149,7 @@ export default function App() {
     const multiplier = gameData.currentRound === 5 ? 3 : 2;
 
     (gameData.teams || []).forEach(team => {
-      const invested = gameData.currentInputs[team.id] || 0;
+      const invested = safeNum(gameData.currentInputs?.[team.id]);
       totalInvested += invested;
       playerDetails.push({
         ...team,
@@ -160,10 +163,10 @@ export default function App() {
     const payoutPerTeam = multipliedFund / numTeams;
 
     const updatedTeams = (gameData.teams || []).map(team => {
-      const invested = gameData.currentInputs[team.id] || 0;
+      const invested = safeNum(gameData.currentInputs?.[team.id]);
       const kept = INITIAL_TOKENS - invested;
       const roundEarned = kept + payoutPerTeam;
-      return { ...team, score: team.score + roundEarned };
+      return { ...team, score: safeNum(team.score) + roundEarned };
     });
 
     const newRoundResult = {
@@ -343,14 +346,14 @@ export default function App() {
     return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center text-white text-xl">Sincronizando con la sala principal...</div>;
   }
 
-  // Helpers
+  // Helpers Seguros
   const isNegotiationRound = gameData.currentRound === 3;
   const isTripleRound = gameData.currentRound === 5;
   const currentMultiplier = isTripleRound ? 3 : 2;
-  const maxScore = Math.max(...(gameData.teams || []).map(t => t.score), 1);
-  const allTeamsReady = (gameData.teams || []).length > 0 && (gameData.teams || []).every(team => gameData.inputStatus[team.id] === true);
+  const maxScore = Math.max(1, ...(gameData.teams || []).map(t => safeNum(t.score)));
+  const allTeamsReady = (gameData.teams || []).length > 0 && (gameData.teams || []).every(team => gameData.inputStatus?.[team.id] === true);
   const myTeam = role === 'player' ? (gameData.teams || []).find(t => t.id === teamId) : null;
-  const myInputStatus = role === 'player' ? gameData.inputStatus[teamId] : false;
+  const myInputStatus = role === 'player' ? (gameData.inputStatus?.[teamId] || false) : false;
 
   const Header = ({ isFacilitator }) => (
     <header className="flex flex-wrap gap-4 justify-between items-center mb-8 border-b border-gray-800 pb-4">
@@ -450,7 +453,7 @@ export default function App() {
             <div className="bg-[#1A1B41] p-8 rounded-2xl border border-green-500/30 text-center">
               <CheckCircle2 size={64} className="mx-auto text-green-500 mb-4" />
               <h3 className="text-2xl font-bold mb-2 text-white">Decisión Enviada</h3>
-              <p className="text-gray-400">Has enviado {gameData.currentInputs[teamId]} fichas al fondo.</p>
+              <p className="text-gray-400">Has enviado {safeNum(gameData.currentInputs?.[teamId])} fichas al fondo.</p>
               <p className="text-sm text-gray-500 mt-6 flex items-center justify-center gap-2">
                 <Clock size={16} className="animate-spin-slow" /> Esperando a los demás equipos...
               </p>
@@ -464,7 +467,7 @@ export default function App() {
                 <p className="text-gray-400 mb-6">Mira la pantalla principal del facilitador para ver los resultados globales.</p>
                 <div className="bg-[#0B132B] p-4 rounded-xl">
                   <span className="text-gray-500 text-sm block mb-1">Tu puntaje acumulado:</span>
-                  <span className="text-3xl font-black text-white">{myTeam?.score.toFixed(1)}</span>
+                  <span className="text-3xl font-black text-white">{safeScore(myTeam?.score)}</span>
                 </div>
              </div>
           )}
@@ -549,7 +552,7 @@ export default function App() {
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(gameData.teams || []).map(team => {
-                  const isReady = gameData.inputStatus[team.id];
+                  const isReady = gameData.inputStatus?.[team.id];
                   return (
                     <div key={team.id} className={`bg-[#1A1B41] p-5 rounded-xl border transition-colors flex flex-col justify-between h-32 ${isReady ? 'border-green-500/50 bg-green-900/10' : 'border-[#2E3192]'}`}>
                       <div className="flex items-center gap-3 mb-2">
@@ -587,14 +590,14 @@ export default function App() {
             <div className="bg-[#050814] p-6 rounded-2xl border border-gray-800 h-fit">
               <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Trophy className="text-orange-500"/> Ranking Actual</h3>
               <div className="space-y-4">
-                {[...(gameData.teams || [])].sort((a,b) => b.score - a.score).map((team, idx) => (
+                {[...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score)).map((team, idx) => (
                   <div key={team.id} className="flex flex-col gap-1">
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-300 truncate max-w-[150px]" title={team.name}>{idx + 1}. {team.name}</span>
-                      <span className="font-bold text-white whitespace-nowrap">{team.score.toFixed(1)} pts</span>
+                      <span className="font-bold text-white whitespace-nowrap">{safeScore(team.score)} pts</span>
                     </div>
                     <div className="w-full bg-gray-800 rounded-full h-2">
-                      <div className={`h-2 rounded-full ${team.color}`} style={{ width: `${(team.score / maxScore) * 100}%` }}></div>
+                      <div className={`h-2 rounded-full ${team.color}`} style={{ width: `${(safeNum(team.score) / maxScore) * 100}%` }}></div>
                     </div>
                   </div>
                 ))}
@@ -612,19 +615,19 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-[#1A1B41] p-6 rounded-2xl border border-gray-700 text-center flex flex-col justify-center">
                 <p className="text-gray-400 text-lg mb-2">Total Invertido (Fondo)</p>
-                <div className="text-5xl font-bold text-white">{gameData.roundResult.totalInvested}</div>
+                <div className="text-5xl font-bold text-white">{safeNum(gameData.roundResult?.totalInvested)}</div>
                 <p className="text-sm text-gray-500 mt-2">de {INITIAL_TOKENS * (gameData.teams || []).length} posibles</p>
               </div>
               
               <div className="bg-gradient-to-br from-[#2E3192] to-[#9D4EDD] p-6 rounded-2xl text-center transform scale-105 shadow-2xl flex flex-col justify-center relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-20"><TrendingUp size={64}/></div>
                 <p className="text-blue-200 text-lg mb-2 relative z-10">Fondo Multiplicado (x{currentMultiplier})</p>
-                <div className="text-6xl font-black text-white relative z-10">{gameData.roundResult.multipliedFund}</div>
+                <div className="text-6xl font-black text-white relative z-10">{safeNum(gameData.roundResult?.multipliedFund)}</div>
               </div>
               
               <div className="bg-[#1A1B41] p-6 rounded-2xl border border-gray-700 text-center flex flex-col justify-center">
                 <p className="text-gray-400 text-lg mb-2">Retorno por Equipo</p>
-                <div className="text-5xl font-bold text-green-400">+{gameData.roundResult.payoutPerTeam.toFixed(1)}</div>
+                <div className="text-5xl font-bold text-green-400">+{safeScore(gameData.roundResult?.payoutPerTeam)}</div>
                 <p className="text-sm text-gray-500 mt-2">Para todos por igual</p>
               </div>
             </div>
@@ -642,23 +645,23 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
-                  {gameData.roundResult.details.map(team => (
+                  {(gameData.roundResult?.details || []).map(team => (
                     <tr key={team.id} className="hover:bg-gray-800/50 transition-colors">
                       <td className="p-4 font-bold flex items-center gap-3">
                         <div className={`w-3 h-3 rounded-full shrink-0 ${team.color}`}></div>
                         <span className="truncate max-w-[200px]" title={team.name}>{team.name}</span>
                       </td>
                       <td className="p-4 text-center">
-                        <span className={`text-xl font-bold ${team.invested >= 7 ? 'text-green-400' : team.invested <= 3 ? 'text-red-400' : 'text-white'}`}>
-                          {team.invested}
+                        <span className={`text-xl font-bold ${safeNum(team.invested) >= 7 ? 'text-green-400' : safeNum(team.invested) <= 3 ? 'text-red-400' : 'text-white'}`}>
+                          {safeNum(team.invested)}
                         </span>
                       </td>
-                      <td className="p-4 text-center text-gray-300">{team.kept}</td>
+                      <td className="p-4 text-center text-gray-300">{safeNum(team.kept)}</td>
                       <td className="p-4 text-center font-bold text-green-400">
-                        +{(team.kept + gameData.roundResult.payoutPerTeam).toFixed(1)}
+                        +{safeScore(safeNum(team.kept) + safeNum(gameData.roundResult?.payoutPerTeam))}
                       </td>
                       <td className="p-4 text-right font-black text-2xl text-white">
-                        {(gameData.teams || []).find(t => t.id === team.id).score.toFixed(1)}
+                        {safeScore((gameData.teams || []).find(t => t.id === team.id)?.score)}
                       </td>
                     </tr>
                   ))}
@@ -691,19 +694,19 @@ export default function App() {
               <div className="bg-[#1A1B41] p-8 rounded-2xl border border-[#2E3192]">
                 <h3 className="text-2xl font-bold mb-6 text-orange-500">Ranking Final</h3>
                 <div className="space-y-6">
-                  {[...(gameData.teams || [])].sort((a,b) => b.score - a.score).map((team, idx) => (
+                  {[...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score)).map((team, idx) => (
                     <div key={team.id} className="relative">
                       <div className="flex justify-between items-end mb-2">
                         <span className="font-bold text-lg flex items-center gap-2">
                           <span className="text-gray-500 text-sm shrink-0">#{idx + 1}</span> 
                           <span className="truncate max-w-[200px]" title={team.name}>{team.name}</span>
                         </span>
-                        <span className="font-black text-2xl shrink-0">{team.score.toFixed(1)} <span className="text-sm text-gray-500 font-normal">pts</span></span>
+                        <span className="font-black text-2xl shrink-0">{safeScore(team.score)} <span className="text-sm text-gray-500 font-normal">pts</span></span>
                       </div>
                       <div className="w-full bg-gray-800 rounded-full h-4 overflow-hidden">
                         <div 
                           className={`h-full ${team.color} transition-all duration-1000 ease-out`} 
-                          style={{ width: `${(team.score / maxScore) * 100}%` }}
+                          style={{ width: `${(safeNum(team.score) / maxScore) * 100}%` }}
                         ></div>
                       </div>
                     </div>
@@ -725,7 +728,7 @@ export default function App() {
                 <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
                   <div className="text-sm text-gray-400 mb-1">Puntaje del Equipo Ganador</div>
                   <div className="text-3xl font-bold text-white">
-                    {(gameData.teams || []).length > 0 ? Math.max(...(gameData.teams || []).map(t => t.score)).toFixed(1) : '0.0'} <span className="text-lg font-normal text-gray-500">pts</span>
+                    {(gameData.teams || []).length > 0 ? safeScore(Math.max(...(gameData.teams || []).map(t => safeNum(t.score)))) : '0.0'} <span className="text-lg font-normal text-gray-500">pts</span>
                   </div>
                 </div>
 
