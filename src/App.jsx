@@ -1,5 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Users, TrendingUp, Wallet, AlertCircle, ChevronRight, Trophy, RotateCcw, CheckCircle2, Clock, Smartphone, Plus, Eye, EyeOff } from 'lucide-react';
+import { 
+  Users, 
+  TrendingUp, 
+  Wallet, 
+  AlertCircle, 
+  ChevronRight, 
+  Trophy, 
+  RotateCcw, 
+  CheckCircle2, 
+  Clock, 
+  Smartphone, 
+  Plus, 
+  Eye, 
+  EyeOff,
+  BarChart3,
+  ShieldCheck
+} from 'lucide-react';
 
 // --- IMPORTACIONES DE FIREBASE ---
 import { initializeApp } from 'firebase/app';
@@ -31,21 +47,22 @@ const defaultGameState = {
   history: []
 };
 
-// --- INICIALIZACIÓN DE FIREBASE ---
+// --- INICIALIZACIÓN DE FIREBASE BLINDADA ---
 let app, auth, db, appId;
-try {
-  // Validación de seguridad para el acceso a variables de entorno de Vite
-  const getEnvVar = (name) => {
-    try {
-      return import.meta.env[name];
-    } catch (e) {
-      return undefined;
-    }
-  };
 
+// Función de extracción segura para evitar errores de entorno en navegadores/StackBlitz
+const getSafeApiKey = () => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FIREBASE_API_KEY) {
+      return import.meta.env.VITE_FIREBASE_API_KEY;
+    }
+  } catch (e) {}
+  return "AIzaSyC1MTCPfK9T062TkG_L1YgOs47qoJwWTH8"; // Clave de respaldo
+};
+
+try {
   const firebaseConfig = {
-    // Si import.meta.env no existe, usamos la clave hardcoded como respaldo seguro
-    apiKey: getEnvVar('VITE_FIREBASE_API_KEY') || "AIzaSyC1MTCPfK9T062TkG_L1YgOs47qoJwWTH8",
+    apiKey: getSafeApiKey(),
     authDomain: "sinergia-corp.firebaseapp.com",
     projectId: "sinergia-corp",
     storageBucket: "sinergia-corp.firebasestorage.app",
@@ -57,10 +74,9 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  // Identificador único para el taller
-  appId = 'sinergia-corp-taller-01';
+  appId = 'sinergia-corp-taller-final-v3'; // ID de sesión único para el taller
 } catch (e) {
-  console.error("Error al iniciar Firebase", e);
+  console.error("Error crítico al iniciar Firebase:", e);
 }
 
 export default function App() {
@@ -72,15 +88,14 @@ export default function App() {
   const [playerInput, setPlayerInput] = useState(0);
   const [joinName, setJoinName] = useState('');
 
-  // 1. Inicialización de Autenticación (Anónima)
+  // 1. Autenticación Anónima Segura
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
       } catch (err) {
-        console.error("Error de Auth:", err);
-        setAuthError("No se pudo conectar al servidor. Activa el login anónimo en Firebase.");
+        setAuthError("No se pudo conectar al servidor de Sinergia.");
       }
     };
     initAuth();
@@ -88,33 +103,25 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Sincronización de Datos en Tiempo Real (Firestore)
+  // 2. Sincronización en Tiempo Real con Firestore
   useEffect(() => {
     if (!user || !db) return;
-
-    // Ruta estricta de Firestore para datos públicos
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'game_session', 'main');
     
-    const unsubscribe = onSnapshot(docRef, 
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setGameData(docSnap.data());
-        } else {
-          // Si la sesión no existe y soy facilitador, la creo
-          if (role === 'facilitator') {
-            setDoc(docRef, defaultGameState);
-          } else {
-            setGameData({ status: 'waiting_host', teams: [] });
-          }
-        }
-      },
-      (err) => console.error("Error de Sincronización:", err)
-    );
-
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setGameData(docSnap.data());
+      } else if (role === 'facilitator') {
+        setDoc(docRef, defaultGameState);
+      } else {
+        setGameData({ status: 'waiting_host', teams: [] });
+      }
+    }, (err) => console.error("Error de Sincronización:", err));
+    
     return () => unsubscribe();
   }, [user, role]);
 
-  // Si el facilitador reinicia el juego, sacamos a los jugadores a la pantalla de unión
+  // Si el facilitador reinicia, sacamos a los jugadores a la pantalla de selección
   useEffect(() => {
     if (role === 'player' && gameData?.status === 'setup' && teamId) {
       const teamExists = (gameData.teams || []).some(t => t.id === teamId);
@@ -125,118 +132,84 @@ export default function App() {
     }
   }, [gameData, role, teamId]);
 
-  // --- ACCIONES DEL FACILITADOR ---
   const getDocRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'game_session', 'main');
 
-  const updateGameData = async (updates) => {
-    if (!gameData || gameData.status === 'waiting_host') return;
-    try {
-      await updateDoc(getDocRef(), updates);
-    } catch (error) {
-      await setDoc(getDocRef(), { ...gameData, ...updates }, { merge: true });
-    }
-  };
-
+  // --- ACCIONES: FACILITADOR ---
   const handleFacilitatorStart = async () => {
     setRole('facilitator');
     await setDoc(getDocRef(), defaultGameState, { merge: true });
   };
 
-  const startGame = () => {
-    const emptyInputs = {};
-    const emptyStatus = {};
-    (gameData.teams || []).forEach(t => { 
-      emptyInputs[t.id] = 0; 
-      emptyStatus[t.id] = false; 
-    });
-    
-    updateGameData({ 
+  const startGame = async () => {
+    await updateDoc(getDocRef(), { 
       status: 'playing', 
       currentRound: 1, 
-      currentInputs: emptyInputs, 
-      inputStatus: emptyStatus 
+      currentInputs: {}, 
+      inputStatus: {},
+      roundResult: null
     });
   };
 
-  const calculateRound = () => {
+  const calculateRound = async () => {
     if (!gameData) return;
-    
     let totalInvested = 0;
     const playerDetails = [];
     const multiplier = gameData.currentRound === 5 ? 3 : 2;
 
-    // Calcular suma del fondo
     (gameData.teams || []).forEach(team => {
       const invested = safeNum(gameData.currentInputs?.[team.id]);
       totalInvested += invested;
-      playerDetails.push({
-        ...team,
-        invested,
-        kept: INITIAL_TOKENS - invested,
-      });
+      playerDetails.push({ ...team, invested, kept: INITIAL_TOKENS - invested });
     });
 
     const multipliedFund = totalInvested * multiplier;
-    const numTeams = Math.max(1, (gameData.teams || []).length); 
-    const payoutPerTeam = multipliedFund / numTeams;
+    const payoutPerTeam = multipliedFund / Math.max(1, (gameData.teams || []).length);
 
-    // Actualizar puntajes acumulados con protección contra nulos
     const updatedTeams = (gameData.teams || []).map(team => {
       const invested = safeNum(gameData.currentInputs?.[team.id]);
-      const kept = INITIAL_TOKENS - invested;
-      const roundEarned = kept + payoutPerTeam;
+      const roundEarned = (INITIAL_TOKENS - invested) + payoutPerTeam;
       return { ...team, score: safeNum(team.score) + roundEarned };
     });
 
-    updateGameData({
+    await updateDoc(getDocRef(), {
       teams: updatedTeams,
-      roundResult: {
-        totalInvested,
-        multipliedFund,
-        payoutPerTeam,
-        details: playerDetails
-      },
-      history: [...(gameData.history || []), { round: gameData.currentRound, totalInvested, payoutPerTeam }],
+      roundResult: { totalInvested, multipliedFund, payoutPerTeam, details: playerDetails },
+      history: [...(gameData.history || []), { round: gameData.currentRound, totalInvested }],
       status: 'reveal'
     });
   };
 
-  const nextRound = () => {
-    if (!gameData) return;
+  const nextRound = async () => {
     if (gameData.currentRound >= TOTAL_ROUNDS) {
-      updateGameData({ status: 'end' });
+      await updateDoc(getDocRef(), { status: 'end' });
     } else {
-      const emptyStatus = {};
-      (gameData.teams || []).forEach(t => { emptyStatus[t.id] = false; });
-
-      updateGameData({
+      await updateDoc(getDocRef(), {
         currentRound: gameData.currentRound + 1,
         status: 'playing',
-        inputStatus: emptyStatus,
+        inputStatus: {},
+        currentInputs: {},
         roundResult: null
       });
-      setPlayerInput(0); 
+      setPlayerInput(0);
     }
   };
 
-  const resetGame = () => {
-    setDoc(getDocRef(), defaultGameState);
-  };
+  const resetGame = () => setDoc(getDocRef(), defaultGameState);
 
-  // --- ACCIONES DEL JUGADOR ---
+  // --- ACCIONES: JUGADOR ---
   const joinAsTeam = async (e) => {
     e.preventDefault();
     if (!joinName.trim() || !gameData) return;
-
-    const newId = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
-    const color = TEAM_COLORS[(gameData.teams || []).length % TEAM_COLORS.length];
-    const newTeam = { id: newId, name: joinName.trim(), color, score: 0 };
-
-    await setDoc(getDocRef(), {
-      teams: [...(gameData.teams || []), newTeam],
-      inputStatus: { ...(gameData.inputStatus || {}), [newId]: false }
-    }, { merge: true });
-
+    const newId = 'team_' + Math.random().toString(36).substr(2, 9);
+    const newTeam = { 
+      id: newId, 
+      name: joinName.trim(), 
+      color: TEAM_COLORS[(gameData.teams || []).length % TEAM_COLORS.length], 
+      score: 0 
+    };
+    await updateDoc(getDocRef(), {
+      teams: [...(gameData.teams || []), newTeam]
+    });
     setTeamId(newId);
     setRole('player');
   };
@@ -245,195 +218,126 @@ export default function App() {
     if (!gameData || !teamId) return;
     const val = Math.max(0, Math.min(INITIAL_TOKENS, Number(playerInput) || 0));
     
-    // Usamos corchetes para actualizar llaves dinámicas en Firestore
-    await setDoc(getDocRef(), {
-      [`currentInputs.${teamId}`]: val,
-      [`inputStatus.${teamId}`]: true
-    }, { merge: true });
+    const updates = {};
+    updates[`currentInputs.${teamId}`] = val;
+    updates[`inputStatus.${teamId}`] = true;
+    
+    try {
+      await updateDoc(getDocRef(), updates);
+    } catch (e) {
+      console.error("Error al enviar decisión:", e);
+    }
   };
 
   // --- COMPONENTES DE INTERFAZ ---
 
-  if (authError) {
-    return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center p-8"><div className="bg-red-500/10 border border-red-500 text-red-100 p-6 rounded-xl max-w-md text-center"><AlertCircle className="mx-auto mb-4" size={48} />{authError}</div></div>;
-  }
+  if (authError) return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center p-8 text-white text-center font-sans"><div className="bg-red-500/10 p-10 rounded-3xl border border-red-500/50"><AlertCircle size={48} className="mx-auto mb-4 text-red-500" />{authError}</div></div>;
+  if (!user) return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center text-white font-sans animate-pulse text-xl tracking-[0.3em] uppercase">Iniciando Sinergia...</div>;
 
-  if (!user) {
-    return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center text-white"><Clock className="animate-spin mr-3"/> Entrando a Sinergia Corp...</div>;
-  }
-
-  // --- PANTALLA: SELECCIÓN DE ROL ---
   if (!role) {
     return (
       <div className="min-h-screen bg-[#0B132B] text-white p-4 md:p-8 flex flex-col items-center justify-center font-sans">
-        <div className="text-center mb-12">
-          <TrendingUp size={80} className="mx-auto text-orange-500 mb-6" />
-          <h1 className="text-5xl font-black mb-4 tracking-tight">Sinergia <span className="text-orange-500">Corp</span></h1>
-          <p className="text-xl text-gray-400">Teoría de juegos aplicada al alto rendimiento</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl w-full">
-          <button 
-            onClick={handleFacilitatorStart}
-            className="bg-[#1A1B41] border border-[#2E3192] p-8 md:p-10 rounded-3xl hover:border-orange-500 transition-all group flex flex-col items-center text-center shadow-2xl"
-          >
-            <div className="bg-orange-500/20 p-6 rounded-full mb-6 group-hover:scale-110 transition-transform">
-              <Users size={48} className="text-orange-500" />
+        <TrendingUp size={80} className="text-orange-500 mb-6 drop-shadow-[0_0_15px_rgba(255,91,34,0.4)]" />
+        <h1 className="text-6xl font-black mb-2 tracking-tighter text-center italic">SINERGIA <span className="text-orange-500">CORP</span></h1>
+        <p className="text-gray-400 mb-12 uppercase tracking-[0.4em] text-xs">Simulador de Cooperación Estratégica</p>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
+          <button onClick={handleFacilitatorStart} className="bg-[#1A1B41] p-12 rounded-[40px] border border-[#2E3192] hover:border-orange-500 transition-all flex flex-col items-center gap-6 group shadow-2xl">
+            <Users size={56} className="text-orange-500 group-hover:scale-110 transition-transform" />
+            <div className="text-center">
+              <h2 className="text-3xl font-black mb-2">FACILITADOR</h2>
+              <p className="text-gray-500 text-xs uppercase tracking-widest">Panel de Control</p>
             </div>
-            <h2 className="text-3xl font-bold mb-2">Soy Facilitador</h2>
-            <p className="text-gray-400 text-sm">Gestionar la sala y proyectar resultados globales.</p>
           </button>
-
-          <button 
-            onClick={() => setRole('player_select')}
-            className="bg-[#1A1B41] border border-[#2E3192] p-8 md:p-10 rounded-3xl hover:border-blue-500 transition-all group flex flex-col items-center text-center shadow-2xl"
-          >
-            <div className="bg-blue-500/20 p-6 rounded-full mb-6 group-hover:scale-110 transition-transform">
-              <Smartphone size={48} className="text-blue-500" />
+          <button onClick={() => setRole('player_select')} className="bg-[#1A1B41] p-12 rounded-[40px] border border-[#2E3192] hover:border-blue-500 transition-all flex flex-col items-center gap-6 group shadow-2xl">
+            <Smartphone size={56} className="text-blue-500 group-hover:scale-110 transition-transform" />
+            <div className="text-center">
+              <h2 className="text-3xl font-black mb-2">EQUIPO</h2>
+              <p className="text-gray-500 text-xs uppercase tracking-widest">Dispositivo Móvil</p>
             </div>
-            <h2 className="text-3xl font-bold mb-2">Soy un Equipo</h2>
-            <p className="text-gray-400 text-sm">Votar y participar desde mi propio dispositivo móvil.</p>
           </button>
         </div>
       </div>
     );
   }
 
-  // --- PANTALLA: REGISTRO DE EQUIPO ---
   if (role === 'player_select') {
-    if (gameData?.status === 'waiting_host') {
-      return (
-        <div className="min-h-screen bg-[#0B132B] text-white p-8 flex flex-col items-center justify-center text-center">
-          <Clock size={64} className="text-gray-500 mb-6 animate-pulse" />
-          <h2 className="text-3xl font-bold mb-4">Sala en preparación</h2>
-          <p className="text-xl text-gray-400 max-w-md">El facilitador aún no ha abierto la sala. Por favor, mantén esta pestaña abierta.</p>
-          <button onClick={() => setRole(null)} className="mt-12 text-gray-500 hover:text-white">Regresar</button>
-        </div>
-      );
-    }
-
     return (
-      <div className="min-h-screen bg-[#0B132B] text-white p-4 md:p-8 flex flex-col items-center justify-center font-sans">
-        <div className="bg-[#1A1B41] p-8 md:p-12 rounded-3xl border border-[#2E3192] shadow-2xl max-w-md w-full text-center">
-          <h2 className="text-3xl font-bold mb-2">Únete al Reto</h2>
-          <p className="text-gray-400 mb-8">Ingresa el nombre de tu equipo o unidad de negocio.</p>
+      <div className="min-h-screen bg-[#0B132B] text-white p-8 flex flex-col items-center justify-center font-sans text-center">
+        <div className="bg-[#1A1B41] p-10 rounded-[40px] border border-[#2E3192] w-full max-w-md shadow-2xl">
+          <ShieldCheck size={48} className="mx-auto mb-6 text-blue-500" />
+          <h2 className="text-3xl font-black mb-2 uppercase tracking-tight">Identificación</h2>
+          <p className="text-gray-500 text-sm mb-8">Ingresa el nombre de tu unidad de negocio</p>
           <form onSubmit={joinAsTeam} className="space-y-6">
-            <input
-              type="text" required maxLength={15}
-              placeholder="Ej: Finanzas"
-              value={joinName}
-              onChange={(e) => setJoinName(e.target.value)}
-              className="w-full bg-[#050814] border-2 border-gray-700 focus:border-blue-500 rounded-xl px-6 py-4 text-xl font-bold text-center text-white outline-none transition-colors"
+            <input 
+              type="text" required maxLength={15} 
+              placeholder="Ej: Finanzas" 
+              value={joinName} 
+              onChange={(e) => setJoinName(e.target.value)} 
+              className="w-full bg-[#050814] border-2 border-gray-700 rounded-2xl px-6 py-5 text-2xl text-center outline-none focus:border-blue-500 transition-all font-bold" 
             />
-            <button 
-              type="submit" disabled={!joinName.trim()}
-              className="w-full bg-blue-500 hover:bg-blue-400 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold py-4 rounded-xl text-lg flex justify-center items-center gap-2 transition-all shadow-[0_0_15px_rgba(0,196,255,0.3)]"
-            >
-              <Plus size={24} /> Registrarme
-            </button>
+            <button type="submit" disabled={!joinName.trim()} className="w-full bg-blue-500 py-5 rounded-2xl font-black text-xl shadow-[0_0_20px_rgba(0,196,255,0.3)] active:scale-95 transition-all">REGISTRAR EQUIPO</button>
           </form>
         </div>
-        <button onClick={() => setRole(null)} className="mt-8 text-gray-500 hover:text-white">Cancelar</button>
       </div>
     );
   }
 
-  if (!gameData || gameData.status === 'waiting_host') {
-    return <div className="min-h-screen bg-[#0B132B] flex items-center justify-center text-white text-xl">Sincronizando...</div>;
-  }
-
-  // --- VARIABLES DE CÁLCULO SEGURO ---
-  const isTripleRound = gameData.currentRound === 5;
-  const currentMultiplier = isTripleRound ? 3 : 2;
-  const maxScoreFound = Math.max(1, ...(gameData.teams || []).map(t => safeNum(t.score)));
-  const allTeamsReady = (gameData.teams || []).length > 0 && (gameData.teams || []).every(team => gameData.inputStatus?.[team.id] === true);
-  const myTeam = role === 'player' ? (gameData.teams || []).find(t => t.id === teamId) : null;
-  const myInputStatus = role === 'player' ? (gameData.inputStatus?.[teamId] || false) : false;
-
-  const HeaderUI = ({ isFacilitator }) => (
-    <header className="flex flex-wrap gap-4 justify-between items-center mb-8 border-b border-gray-800 pb-4">
-      <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-white tracking-wide flex items-center gap-3">
-          Sinergia <span className="text-orange-500">Corp</span>
-          {isFacilitator ? 
-            <span className="bg-gray-800 text-[10px] px-2 py-1 rounded text-gray-400 font-normal uppercase tracking-widest">Consultor</span> :
-            <span className={`text-[10px] px-3 py-1 rounded-full font-bold text-white ${myTeam?.color} uppercase tracking-widest`}>{myTeam?.name}</span>
-          }
-        </h1>
-      </div>
-      {gameData.status !== 'setup' && gameData.status !== 'end' && (
-        <div className="flex items-center gap-4">
-          <div className="bg-[#1A1B41] px-4 py-2 rounded-lg border border-[#2E3192] flex items-center gap-3">
-            <span className="text-gray-400 text-xs uppercase tracking-widest">Ronda</span>
-            <div className="text-xl font-bold text-white">{gameData.currentRound} / {TOTAL_ROUNDS}</div>
-          </div>
-        </div>
-      )}
-    </header>
-  );
-
-  // --- VISTA: JUGADOR (MÓVIL) ---
   if (role === 'player') {
+    const isReady = gameData?.inputStatus?.[teamId];
+    const myTeamData = (gameData?.teams || []).find(t => t.id === teamId);
     return (
-      <div className="min-h-screen bg-[#0B132B] text-white p-4 md:p-8 font-sans">
-        <div className="max-w-md mx-auto">
-          <HeaderUI isFacilitator={false} />
-          
-          {gameData.status === 'setup' && (
-            <div className="bg-[#1A1B41] p-8 rounded-2xl border border-green-500/30 text-center animate-in slide-in-from-bottom-4">
-              <CheckCircle2 size={64} className="mx-auto text-green-500 mb-4" />
-              <h3 className="text-2xl font-bold mb-2">¡Registrado!</h3>
-              <p className="text-gray-400 text-sm mb-6">Miren la pantalla principal. El facilitador iniciará pronto.</p>
-              <div className="inline-flex items-center gap-2 text-xs text-blue-400 bg-blue-500/10 px-4 py-2 rounded-full">
-                <Clock size={14} className="animate-pulse" /> Esperando Ronda 1...
-              </div>
+      <div className="min-h-screen bg-[#0B132B] text-white p-6 font-sans flex flex-col">
+        <header className="flex justify-between items-center mb-10 pb-4 border-b border-gray-800">
+           <h1 className="font-black italic text-lg tracking-tighter">SINERGIA <span className="text-orange-500 font-black">CORP</span></h1>
+           <span className={`px-4 py-1 rounded-full text-[10px] font-black uppercase ${myTeamData?.color || 'bg-gray-700'}`}>{myTeamData?.name}</span>
+        </header>
+        <div className="flex-grow flex flex-col justify-center max-w-md mx-auto w-full">
+          {gameData?.status === 'setup' && (
+            <div className="text-center animate-in fade-in zoom-in duration-500">
+              <CheckCircle2 size={80} className="mx-auto text-green-500 mb-6 drop-shadow-[0_0_15px_rgba(34,197,94,0.4)]" />
+              <h2 className="text-3xl font-black mb-2 uppercase italic">Conectado</h2>
+              <p className="text-gray-500 text-sm">El simulador está en pausa. El consultor iniciará la ronda pronto.</p>
             </div>
           )}
-
-          {gameData.status === 'playing' && !myInputStatus && (
-            <div className="bg-[#1A1B41] p-6 rounded-2xl border border-[#2E3192] shadow-2xl animate-in slide-in-from-bottom-4">
-              <h2 className="text-2xl font-bold text-center mb-2">Tu Decisión</h2>
-              <p className="text-gray-400 text-center text-sm mb-8">¿Cuánto invertirás en el fondo del equipo?</p>
-              
-              <div className="flex justify-center items-center gap-8 mb-10">
-                <button onClick={() => setPlayerInput(Math.max(0, playerInput - 1))} className="w-16 h-16 rounded-full bg-gray-800 text-3xl font-bold">-</button>
-                <div className="text-7xl font-black text-orange-500 w-24 text-center">{playerInput}</div>
-                <button onClick={() => setPlayerInput(Math.min(INITIAL_TOKENS, playerInput + 1))} className="w-16 h-16 rounded-full bg-gray-800 text-3xl font-bold">+</button>
+          {gameData?.status === 'playing' && !isReady && (
+            <div className="animate-in slide-in-from-bottom-8 duration-500">
+              <div className="text-center mb-10">
+                <h2 className="text-gray-500 text-xs font-black uppercase tracking-[0.3em] mb-2">Ronda Actual</h2>
+                <span className="text-5xl font-black italic">{gameData.currentRound} <span className="text-gray-700 font-normal">/ {TOTAL_ROUNDS}</span></span>
               </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-8 text-xs text-center border-t border-gray-800 pt-6">
-                <div><span className="block text-xl font-bold text-white">{INITIAL_TOKENS - playerInput}</span> PRIVADO</div>
-                <div><span className="block text-xl font-bold text-orange-500">{playerInput}</span> FONDO</div>
-              </div>
-
-              <button onClick={submitPlayerDecision} className="w-full py-5 rounded-xl font-black text-lg bg-orange-500 shadow-[0_0_20px_rgba(255,91,34,0.4)] active:scale-95 transition-all">ENVIAR DECISIÓN</button>
-            </div>
-          )}
-
-          {(gameData.status === 'playing' && myInputStatus) && (
-             <div className="bg-[#1A1B41] p-10 rounded-2xl border border-green-500/20 text-center">
-              <CheckCircle2 size={64} className="mx-auto text-green-500 mb-4" />
-              <p className="text-gray-300">Decisión enviada con éxito.</p>
-              <p className="text-xs text-gray-500 mt-4 animate-pulse">Esperando a los demás equipos...</p>
-            </div>
-          )}
-
-          {gameData.status === 'reveal' && (
-             <div className="bg-[#1A1B41] p-8 rounded-2xl border border-blue-500/30 text-center animate-in zoom-in-95 duration-500">
-                <h3 className="text-xl font-bold mb-6 text-blue-400 uppercase tracking-widest">Resultados de Ronda</h3>
-                <div className="bg-[#0B132B] p-6 rounded-2xl border border-gray-800">
-                  <p className="text-gray-500 text-xs mb-1 uppercase">Puntaje Acumulado</p>
-                  <span className="text-5xl font-black text-white">{safeScore(myTeam?.score)} <span className="text-sm font-normal text-gray-500">pts</span></span>
+              <div className="bg-[#1A1B41] p-10 rounded-[50px] border border-[#2E3192] text-center mb-10 shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4 opacity-5"><TrendingUp size={100}/></div>
+                <p className="text-gray-400 mb-10 uppercase text-[10px] tracking-[0.3em] font-black">Asignación de Capital</p>
+                <div className="flex justify-between items-center mb-12">
+                  <button onClick={() => setPlayerInput(Math.max(0, playerInput - 1))} className="w-16 h-16 rounded-full bg-gray-800 text-4xl font-bold active:bg-orange-500 shadow-lg">-</button>
+                  <span className="text-9xl font-black text-orange-500 drop-shadow-[0_5px_15px_rgba(255,91,34,0.5)]">{playerInput}</span>
+                  <button onClick={() => setPlayerInput(Math.min(INITIAL_TOKENS, playerInput + 1))} className="w-16 h-16 rounded-full bg-gray-800 text-4xl font-bold active:bg-orange-500 shadow-lg">+</button>
                 </div>
-                <p className="text-gray-400 text-sm mt-8 italic">Mira la pantalla del consultor para el desglose matemático.</p>
-             </div>
+                <div className="grid grid-cols-2 text-[10px] font-black uppercase tracking-widest text-gray-500 gap-6">
+                  <div className="bg-[#050814] py-4 rounded-2xl border border-gray-800">Privado: {INITIAL_TOKENS - playerInput}</div>
+                  <div className="bg-[#050814] py-4 rounded-2xl border border-gray-800 text-orange-400/70">Fondo: {playerInput}</div>
+                </div>
+              </div>
+              <button onClick={submitPlayerDecision} className="w-full bg-orange-500 py-6 rounded-[30px] font-black text-xl shadow-[0_0_30px_rgba(255,91,34,0.4)] active:scale-95 transition-all uppercase tracking-widest">ENVIAR DECISIÓN</button>
+            </div>
           )}
-
-          {gameData.status === 'end' && (
-            <div className="bg-[#1A1B41] p-10 rounded-2xl border border-yellow-500/30 text-center">
-                <Trophy size={64} className="mx-auto text-yellow-500 mb-6" />
-                <h3 className="text-3xl font-black mb-2">Simulación Finalizada</h3>
-                <p className="text-gray-400 text-sm uppercase tracking-widest">Gracias por participar</p>
+          {gameData?.status === 'playing' && isReady && (
+            <div className="text-center animate-in zoom-in duration-500">
+              <Clock size={70} className="mx-auto text-blue-500 mb-8 animate-spin-slow" />
+              <h2 className="text-2xl font-black uppercase tracking-widest italic text-blue-400">Datos en Proceso</h2>
+              <p className="text-gray-500 mt-4 text-sm px-8">Tu decisión ha sido cifrada. Espera a que el consultor revele el impacto global.</p>
+            </div>
+          )}
+          {gameData?.status === 'reveal' && (
+            <div className="text-center animate-in fade-in duration-700">
+              <BarChart3 size={60} className="mx-auto text-blue-400 mb-6" />
+              <h2 className="text-blue-400 font-black text-2xl mb-6 uppercase tracking-widest italic">Balance Consolidado</h2>
+              <div className="bg-[#1A1B41] p-12 rounded-[50px] border border-[#2E3192] shadow-2xl">
+                <p className="text-gray-500 text-[10px] font-black mb-4 uppercase tracking-[0.2em]">Patrimonio Acumulado</p>
+                <span className="text-8xl font-black text-white">{safeScore(myTeamData?.score)}</span>
+                <span className="text-lg font-bold text-gray-600 ml-2">pts</span>
+              </div>
             </div>
           )}
         </div>
@@ -441,172 +345,98 @@ export default function App() {
     );
   }
 
-  // --- VISTA: FACILITADOR (PROYECTOR) ---
+  const allReady = (gameData?.teams || []).length > 0 && (gameData?.teams || []).every(t => gameData?.inputStatus?.[t.id]);
+  const maxScore = Math.max(1, ...(gameData?.teams || []).map(t => safeNum(t.score)));
+
   return (
-    <div className="min-h-screen bg-[#0B132B] text-white p-8 font-sans">
+    <div className="min-h-screen bg-[#0B132B] text-white p-8 font-sans overflow-x-hidden">
       <div className="max-w-6xl mx-auto">
-        <HeaderUI isFacilitator={true} />
-        
-        {gameData.status === 'setup' && (
-          <div className="bg-[#1A1B41] p-12 rounded-3xl border border-[#2E3192] shadow-2xl text-center max-w-3xl mx-auto">
-            <h2 className="text-4xl font-bold mb-6">Sala de Espera Directiva</h2>
-            <p className="text-gray-400 mb-10 text-lg">Los equipos aparecerán aquí una vez se registren desde sus dispositivos móviles.</p>
-            <div className="bg-[#050814] rounded-2xl p-10 mb-10 min-h-[150px] flex flex-wrap gap-4 justify-center items-center border border-gray-800">
-              {(gameData.teams || []).length === 0 ? (
-                <p className="text-gray-600 italic">Esperando conexiones...</p>
-              ) : (
-                (gameData.teams || []).map(team => (
-                  <div key={team.id} className="bg-[#1A1B41] border border-gray-700 px-8 py-4 rounded-full flex items-center gap-4 animate-in zoom-in">
-                    <div className={`w-4 h-4 rounded-full ${team.color}`}></div>
-                    <span className="font-black text-xl">{team.name}</span>
-                  </div>
-                ))
-              )}
+        <header className="flex justify-between items-center mb-16 border-b border-gray-800 pb-8">
+          <h1 className="text-5xl font-black tracking-tighter italic">SINERGIA <span className="text-orange-500">CORP</span></h1>
+          {gameData?.status !== 'setup' && (
+            <div className="text-3xl font-black bg-[#1A1B41] px-10 py-4 rounded-[20px] border border-[#2E3192] italic">
+              RONDA {gameData.currentRound} <span className="text-gray-700 font-normal ml-3">/ {TOTAL_ROUNDS}</span>
             </div>
-            <button 
-              onClick={startGame} disabled={(gameData.teams || []).length < 1}
-              className="bg-orange-500 hover:bg-orange-400 py-5 px-16 rounded-full text-2xl font-black shadow-[0_0_25px_rgba(255,91,34,0.4)] transition-all active:scale-95"
-            >
-              INICIAR DINÁMICA
-            </button>
+          )}
+        </header>
+        {gameData?.status === 'setup' && (
+          <div className="bg-[#1A1B41] p-20 rounded-[80px] text-center border border-[#2E3192] shadow-2xl">
+            <h2 className="text-6xl font-black mb-6 uppercase tracking-tighter italic">Centro de Mando</h2>
+            <div className="flex flex-wrap justify-center gap-6 mb-20 min-h-[140px] items-center">
+              {(gameData.teams || []).length === 0 ? <p className="text-gray-700 animate-pulse uppercase tracking-widest text-sm">Esperando conexiones entrantes...</p> : 
+                (gameData.teams || []).map(t => (
+                  <div key={t.id} className="bg-[#050814] px-12 py-6 rounded-[30px] border border-gray-800 font-black text-3xl shadow-2xl animate-in zoom-in">
+                    <div className={`w-5 h-5 rounded-full inline-block mr-5 ${t.color}`}></div>{t.name}
+                  </div>
+                ))}
+            </div>
+            <button onClick={startGame} disabled={(gameData.teams || []).length < 1} className="bg-orange-500 hover:bg-orange-400 py-10 px-32 rounded-full text-4xl font-black shadow-2xl disabled:opacity-10 uppercase italic">INICIAR EVALUACIÓN</button>
           </div>
         )}
-
-        {gameData.status === 'playing' && (
-           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="lg:col-span-2 space-y-6">
-                <h2 className="text-3xl font-bold flex items-center gap-4">
-                  Estado de Decisiones 
-                  <span className="text-sm bg-gray-800 px-3 py-1 rounded-full text-gray-400 font-normal">En curso</span>
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {(gameData.teams || []).map(team => (
-                    <div key={team.id} className={`bg-[#1A1B41] p-6 rounded-2xl border transition-all ${gameData.inputStatus?.[team.id] ? 'border-green-500/50 bg-green-500/5' : 'border-[#2E3192]'}`}>
-                      <div className="flex justify-between items-center">
-                        <h3 className="font-bold text-2xl">{team.name}</h3>
-                        {gameData.inputStatus?.[team.id] ? 
-                          <span className="text-green-400 font-black flex items-center gap-2 animate-in fade-in"><CheckCircle2 size={20}/> RECIBIDO</span> : 
-                          <span className="text-gray-500 text-sm animate-pulse flex items-center gap-2"><Clock size={16}/> PENSANDO...</span>
-                        }
-                      </div>
+        {gameData?.status === 'playing' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-16">
+            <div className="lg:col-span-2">
+              <h2 className="text-4xl font-black mb-12 flex items-center gap-6 italic"><Clock size={40} className="text-orange-500 animate-pulse"/> MONITOREO DE ACTIVIDAD</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {(gameData.teams || []).map(t => (
+                  <div key={t.id} className={`p-10 rounded-[40px] border transition-all duration-700 ${gameData.inputStatus?.[t.id] ? 'bg-green-500/10 border-green-500/50 shadow-[0_0_30px_rgba(34,197,94,0.1)]' : 'bg-[#1A1B41] border-[#2E3192]'}`}>
+                    <div className="flex justify-between items-center">
+                      <span className="text-4xl font-black italic">{t.name}</span>
+                      {gameData.inputStatus?.[t.id] ? <span className="text-green-400 font-black text-2xl flex items-center gap-3 tracking-tighter"><ShieldCheck size={28} /> RECIBIDO</span> : <span className="text-gray-700 animate-pulse uppercase text-[10px] font-black tracking-[0.4em]">Procesando...</span>}
                     </div>
-                  ))}
-                </div>
-                <div className="flex justify-end mt-12">
-                  <button 
-                    onClick={calculateRound} disabled={!allTeamsReady}
-                    className="bg-blue-500 hover:bg-blue-400 py-5 px-12 rounded-2xl font-black text-xl shadow-[0_0_20px_rgba(0,196,255,0.4)] disabled:opacity-50 transition-all"
-                  >
-                    REVELAR RESULTADOS <ChevronRight className="inline ml-2" />
-                  </button>
-                </div>
+                  </div>
+                ))}
               </div>
-
-              <div className="bg-[#050814] p-8 rounded-3xl border border-gray-800 h-fit">
-                <h3 className="text-xl font-bold mb-8 flex items-center gap-3"><Trophy className="text-orange-500"/> Ranking Estratégico</h3>
-                <div className="space-y-6">
-                  {[...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score)).map((team, idx) => (
-                    <div key={team.id}>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-gray-400">{idx + 1}. {team.name}</span>
-                        <span className="font-black text-white">{safeScore(team.score)} pts</span>
-                      </div>
-                      <div className="w-full bg-gray-800 rounded-full h-2">
-                        <div className={`h-2 rounded-full ${team.color} transition-all duration-1000`} style={{ width: `${(safeNum(team.score) / maxScoreFound) * 100}%` }}></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-           </div>
-        )}
-
-        {gameData.status === 'reveal' && gameData.roundResult && (
-          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-8 duration-700">
-            <h2 className="text-4xl font-black text-center mb-4">Resultados de la Ronda {gameData.currentRound}</h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-[#1A1B41] p-8 rounded-3xl border border-gray-800 text-center">
-                <p className="text-gray-500 text-sm uppercase mb-2 tracking-widest">Inversión Total</p>
-                <div className="text-6xl font-black">{safeNum(gameData.roundResult.totalInvested)}</div>
-              </div>
-              <div className="bg-gradient-to-br from-[#2E3192] to-[#9D4EDD] p-8 rounded-3xl text-center shadow-2xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10"><TrendingUp size={80}/></div>
-                <p className="text-white/60 text-sm uppercase mb-2 tracking-widest relative z-10">Fondo Multiplicado x{currentMultiplier}</p>
-                <div className="text-7xl font-black relative z-10">{safeNum(gameData.roundResult.multipliedFund)}</div>
-              </div>
-              <div className="bg-[#1A1B41] p-8 rounded-3xl border border-gray-800 text-center">
-                <p className="text-gray-500 text-sm uppercase mb-2 tracking-widest">Retorno Individual</p>
-                <div className="text-6xl font-black text-green-400">+{safeScore(gameData.roundResult.payoutPerTeam)}</div>
-              </div>
+              <div className="mt-20 text-right"><button onClick={calculateRound} disabled={!allReady} className="bg-blue-600 hover:bg-blue-500 px-24 py-10 rounded-[35px] font-black text-3xl shadow-3xl disabled:opacity-20 uppercase italic">CONSOLIDAR RESULTADOS <ChevronRight className="inline ml-4" size={32} /></button></div>
             </div>
-
-            <div className="bg-[#1A1B41] rounded-3xl border border-[#2E3192] overflow-hidden shadow-2xl">
-              <table className="w-full text-left">
-                <thead className="bg-[#0B132B]">
-                  <tr className="text-gray-400 text-xs uppercase tracking-widest">
-                    <th className="p-6">Equipo</th>
-                    <th className="p-6 text-center">Inv. Fondo</th>
-                    <th className="p-6 text-center">Bolsillo</th>
-                    <th className="p-6 text-center text-green-400">Ganancia</th>
-                    <th className="p-6 text-right">Puntaje Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-800">
-                  {(gameData.roundResult.details || []).map(team => (
-                    <tr key={team.id} className="hover:bg-white/5 transition-colors">
-                      <td className="p-6 font-bold flex items-center gap-4">
-                         <div className={`w-3 h-3 rounded-full ${team.color}`}></div> {team.name}
-                      </td>
-                      <td className="p-6 text-center text-2xl font-black">{safeNum(team.invested)}</td>
-                      <td className="p-6 text-center text-gray-500">{safeNum(team.kept)}</td>
-                      <td className="p-6 text-center text-green-400 font-bold">+{safeScore(safeNum(team.kept) + safeNum(gameData.roundResult.payoutPerTeam))}</td>
-                      <td className="p-6 text-right font-black text-3xl">
-                        {safeScore((gameData.teams || []).find(t => t.id === team.id)?.score)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="flex justify-center mt-12">
-              <button 
-                onClick={nextRound} 
-                className="bg-orange-500 hover:bg-orange-400 py-6 px-20 rounded-full text-2xl font-black shadow-[0_0_30px_rgba(255,91,34,0.5)] transition-all active:scale-95"
-              >
-                {gameData.currentRound >= TOTAL_ROUNDS ? 'VER RESULTADOS FINALES' : `AVANZAR A RONDA ${gameData.currentRound + 1}`}
-              </button>
+            <div className="bg-[#050814] p-12 rounded-[60px] border border-gray-800 h-fit shadow-2xl">
+              <h3 className="font-black mb-12 text-gray-500 uppercase text-xs tracking-[0.4em] text-center border-b border-gray-800 pb-8 italic">Ranking de Valor</h3>
+              <div className="space-y-12">
+                {[...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score)).map((t, i) => (
+                  <div key={t.id}>
+                    <div className="flex justify-between mb-4 items-end"><span className="text-2xl font-bold text-gray-500 tracking-tighter">#{i+1} <span className="text-gray-200 ml-2">{t.name}</span></span><span className="font-black text-3xl italic">{safeScore(t.score)}</span></div>
+                    <div className="w-full bg-gray-900 h-3 rounded-full border border-gray-800 p-[2px]"><div className={`h-full ${t.color} rounded-full transition-all duration-1000 ease-out`} style={{ width: `${(safeNum(t.score) / maxScore) * 100}%` }}></div></div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
-
-        {gameData.status === 'end' && (
-          <div className="text-center space-y-12 animate-in zoom-in duration-700">
-            <div className="space-y-4">
-              <Trophy size={100} className="mx-auto text-yellow-500 mb-6 drop-shadow-[0_0_20px_rgba(234,179,8,0.5)]" />
-              <h2 className="text-6xl font-black">Simulación Exitosa</h2>
-              <p className="text-gray-400 text-xl max-w-2xl mx-auto">La desconfianza tiene un costo matemático. La colaboración es la estrategia más rentable.</p>
+        {gameData?.status === 'reveal' && (
+          <div className="space-y-20 animate-in slide-in-from-bottom-12 duration-1000">
+            <h2 className="text-6xl font-black text-center tracking-tighter italic">REPORTE DE RESULTADOS - RONDA {gameData.currentRound}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-center text-white">
+               <div className="bg-[#1A1B41] p-14 rounded-[50px] border border-gray-800 shadow-2xl"><p className="text-gray-500 text-[10px] mb-6 tracking-[0.4em] uppercase font-black">Capital Invertido</p><span className="text-9xl font-black italic">{safeNum(gameData.roundResult.totalInvested)}</span></div>
+               <div className="bg-gradient-to-br from-[#2E3192] to-[#9D4EDD] p-14 rounded-[50px] shadow-2xl transform scale-110"><p className="text-white/60 text-[10px] mb-6 tracking-[0.4em] uppercase font-black">Multiplicado x{gameData.currentRound === 5 ? '3' : '2'}</p><span className="text-9xl font-black italic">{safeNum(gameData.roundResult.multipliedFund)}</span></div>
+               <div className="bg-[#1A1B41] p-14 rounded-[50px] border border-gray-800 shadow-2xl"><p className="text-gray-500 text-[10px] mb-6 tracking-[0.4em] uppercase font-black">Utilidad Grupal p/e</p><span className="text-9xl font-black text-green-400 italic">+{safeScore(gameData.roundResult.payoutPerTeam)}</span></div>
             </div>
-
-            <div className="bg-[#1A1B41] p-10 rounded-[40px] max-w-2xl mx-auto border border-[#2E3192] shadow-2xl">
-              <h3 className="text-2xl font-bold mb-10 uppercase tracking-widest text-blue-400">Puntajes de Gestión Finales</h3>
-              {[...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score)).map((team, idx) => (
-                <div key={team.id} className="flex justify-between items-center mb-6 border-b border-gray-800 pb-4 last:border-0 last:mb-0">
-                  <div className="flex items-center gap-4">
-                    <span className="text-gray-600 font-bold text-2xl">#{idx + 1}</span>
-                    <span className="text-2xl font-bold">{team.name}</span>
-                  </div>
-                  <span className="text-3xl font-black text-white">{safeScore(team.score)} <span className="text-sm font-normal text-gray-500">pts</span></span>
+            <div className="bg-[#1A1B41] rounded-[60px] border border-[#2E3192] overflow-hidden">
+               <table className="w-full text-left">
+                  <thead className="bg-[#0B132B]"><tr className="text-gray-500 text-xs uppercase font-black tracking-[0.3em]"><th className="p-12">Unidad</th><th className="p-12 text-center">Aporte</th><th className="p-12 text-center text-green-400">Gana</th><th className="p-12 text-right">Patrimonio</th></tr></thead>
+                  <tbody className="divide-y divide-gray-800/30">
+                    {gameData.roundResult.details?.map(d => (
+                      <tr key={d.id} className="hover:bg-white/5"><td className="p-12 text-4xl font-black italic">{d.name}</td><td className="p-12 text-center text-6xl font-black text-orange-500">{d.invested}</td><td className="p-12 text-center text-green-400 font-black text-4xl">+{safeScore(d.kept + gameData.roundResult.payoutPerTeam)}</td><td className="p-12 text-right text-6xl font-black">{safeScore((gameData.teams || []).find(t => t.id === d.id)?.score)}</td></tr>
+                    ))}
+                  </tbody>
+               </table>
+            </div>
+            <div className="flex justify-center"><button onClick={nextRound} className="bg-orange-500 py-12 px-24 rounded-full text-4xl font-black uppercase italic">{gameData.currentRound >= TOTAL_ROUNDS ? 'FINALIZAR' : `SIGUIENTE RONDA`}</button></div>
+          </div>
+        )}
+        {gameData?.status === 'end' && (
+          <div className="text-center space-y-20">
+            <Trophy size={200} className="mx-auto text-yellow-500 mb-10" />
+            <h2 className="text-8xl font-black uppercase italic">Simulación Exitosa</h2>
+            <div className="bg-[#1A1B41] p-20 rounded-[80px] max-w-4xl mx-auto border border-[#2E3192]">
+              <h3 className="text-blue-400 font-black mb-16 uppercase text-2xl italic">Indicadores Finales</h3>
+              {([...(gameData.teams || [])].sort((a,b) => safeNum(b.score) - safeNum(a.score))).map((t, i) => (
+                <div key={t.id} className="flex justify-between items-center mb-8 pb-8 border-b border-gray-800 last:border-0 last:mb-0 last:pb-0">
+                  <span className="text-6xl font-black text-gray-700 italic">#{i+1} <span className="text-white ml-4 font-black">{t.name}</span></span>
+                  <span className="text-7xl font-black italic">{safeScore(t.score)} pts</span>
                 </div>
               ))}
             </div>
-            
-            <div className="pt-10 flex flex-col items-center gap-4">
-              <p className="text-gray-600 text-sm">¿Deseas aplicar una nueva estrategia?</p>
-              <button onClick={resetGame} className="text-gray-400 hover:text-white flex items-center gap-2 transition-colors border border-gray-800 px-6 py-3 rounded-full">
-                <RotateCcw size={18}/> Reiniciar Dinámica para otro equipo
-              </button>
-            </div>
+            <button onClick={resetGame} className="text-gray-600 border-2 border-gray-800 px-16 py-8 rounded-full font-black uppercase tracking-[0.5em] hover:bg-gray-800 transition-all italic">REINICIAR SISTEMA</button>
           </div>
         )}
       </div>
